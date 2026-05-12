@@ -504,6 +504,21 @@ GEMINI_ENABLED: bool = _GEMINI_ENABLED_RAW not in ("false", "0", "no", "disabled
 
 
 # ==================================================================================================
+# OpenRouter Provider Settings
+# ==================================================================================================
+
+# OpenRouter API key (from https://openrouter.ai/keys)
+OPENROUTER_API_KEY: str = os.getenv("OPENROUTER_API_KEY", "")
+
+# Set to false to disable the OpenRouter provider
+_OPENROUTER_ENABLED_RAW: str = os.getenv("OPENROUTER_ENABLED", "true").lower()
+OPENROUTER_ENABLED: bool = _OPENROUTER_ENABLED_RAW not in ("false", "0", "no", "disabled", "off")
+
+# OpenRouter base URL
+OPENROUTER_BASE_URL: str = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+
+
+# ==================================================================================================
 # Payload Size Guard Settings
 # ==================================================================================================
 

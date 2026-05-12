@@ -4,7 +4,7 @@
     "/home/marcelo/.local/share/kiro-cli/data.sqlite3": {
       "failures": 0,
       "last_failure_time": 0.0,
-      "models_cached_at": 1778146559.214505,
+      "models_cached_at": 1778619224.616517,
       "stats": {
         "total_requests": 0,
         "successful_requests": 0,

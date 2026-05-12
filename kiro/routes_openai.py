@@ -136,7 +136,18 @@ async def get_models(request: Request):
         )
         for model_id in available_model_ids
     ]
-    
+
+    # Add OpenRouter models if enabled
+    from kiro.openrouter_provider import get_openrouter_models
+    for or_model in get_openrouter_models():
+        openai_models.append(
+            OpenAIModel(
+                id=or_model["id"],
+                owned_by="openrouter",
+                description=or_model["display_name"],
+            )
+        )
+
     return ModelList(data=openai_models)
 
 
@@ -215,6 +226,85 @@ async def chat_completions(request: Request, request_data: ChatCompletionRequest
     if tool_results_modified > 0 or content_notices_added > 0:
         request_data.messages = modified_messages
         logger.info(f"Truncation recovery: modified {tool_results_modified} tool_result(s), added {content_notices_added} content notice(s)")
+
+    # --- OpenRouter provider routing ---
+    from kiro.openrouter_provider import is_openrouter_model, stream_openrouter_openai
+    if is_openrouter_model(request_data.model):
+        logger.info(f"Routing to OpenRouter provider (model={request_data.model})")
+        request_dict = request_data.model_dump()
+
+        if request_data.stream:
+            async def openrouter_openai_stream():
+                try:
+                    async for chunk in stream_openrouter_openai(request_dict, request_data.model):
+                        yield chunk
+                except HTTPException as e:
+                    error_data = json.dumps({"error": e.detail if isinstance(e.detail, dict) else {"message": str(e.detail)}})
+                    yield f"data: {error_data}\n\n"
+                except Exception as e:
+                    logger.error(f"OpenRouter streaming error: {e}", exc_info=True)
+                    yield f'data: {json.dumps({"error": {"message": str(e)}})}\n\n'
+
+            return StreamingResponse(
+                openrouter_openai_stream(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+            )
+        else:
+            # Non-streaming: collect full response
+            collected_content = []
+            collected_tool_calls = []
+            finish_reason = "stop"
+            try:
+                async for chunk in stream_openrouter_openai(request_dict, request_data.model):
+                    raw = chunk.replace("data: ", "").strip()
+                    if raw in ("", "[DONE]"):
+                        continue
+                    try:
+                        event = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    choices = event.get("choices", [])
+                    if not choices:
+                        continue
+                    choice = choices[0]
+                    delta = choice.get("delta", {})
+                    if delta.get("content"):
+                        collected_content.append(delta["content"])
+                    if delta.get("tool_calls"):
+                        for tc in delta["tool_calls"]:
+                            tc_idx = tc.get("index", 0)
+                            while len(collected_tool_calls) <= tc_idx:
+                                collected_tool_calls.append({"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+                            if tc.get("id"):
+                                collected_tool_calls[tc_idx]["id"] = tc["id"]
+                            if tc.get("function", {}).get("name"):
+                                collected_tool_calls[tc_idx]["function"]["name"] = tc["function"]["name"]
+                            if tc.get("function", {}).get("arguments"):
+                                collected_tool_calls[tc_idx]["function"]["arguments"] += tc["function"]["arguments"]
+                    if choice.get("finish_reason"):
+                        finish_reason = choice["finish_reason"]
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"OpenRouter non-streaming error: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail={"error": {"message": str(e)}})
+
+            response_message = {"role": "assistant", "content": "".join(collected_content) or None}
+            if collected_tool_calls:
+                response_message["tool_calls"] = collected_tool_calls
+
+            return JSONResponse(content={
+                "id": f"chatcmpl-{uuid.uuid4().hex[:24]}",
+                "object": "chat.completion",
+                "model": request_data.model,
+                "choices": [{
+                    "index": 0,
+                    "message": response_message,
+                    "finish_reason": finish_reason,
+                }],
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            })
 
     # --- Gemini provider routing ---
     if is_gemini_model(request_data.model):

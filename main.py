@@ -523,6 +523,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Error closing Gemini HTTP client: {e}")
 
+    # Close OpenRouter HTTP client
+    try:
+        from kiro.openrouter_provider import close_openrouter_client
+        await close_openrouter_client()
+    except Exception as e:
+        logger.warning(f"Error closing OpenRouter HTTP client: {e}")
+
 
 # --- FastAPI Application ---
 app = FastAPI(

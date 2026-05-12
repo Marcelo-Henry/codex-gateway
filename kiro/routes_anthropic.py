@@ -137,6 +137,91 @@ async def messages(
     if anthropic_version:
         logger.debug(f"Anthropic-Version header: {anthropic_version}")
 
+    # --- OpenRouter provider routing ---
+    from kiro.openrouter_provider import is_openrouter_model, stream_openrouter_anthropic
+    if is_openrouter_model(request_data.model):
+        logger.info(f"Routing to OpenRouter provider (model={request_data.model})")
+        request_dict = request_data.model_dump()
+
+        if request_data.stream:
+            async def openrouter_stream_wrapper():
+                try:
+                    async for chunk in stream_openrouter_anthropic(request_dict, request_data.model):
+                        yield chunk
+                except HTTPException as e:
+                    yield f'event: error\ndata: {json.dumps(e.detail)}\n\n'
+                except Exception as e:
+                    logger.error(f"OpenRouter streaming error: {e}", exc_info=True)
+                    yield f'event: error\ndata: {json.dumps({"type": "error", "error": {"type": "api_error", "message": str(e)}})}\n\n'
+
+            return StreamingResponse(
+                openrouter_stream_wrapper(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "Connection": "keep-alive"},
+            )
+        else:
+            collected_content_blocks = []
+            current_tool = None
+            current_text_parts = []
+            stop_reason = "end_turn"
+            message_id = f"msg_{uuid.uuid4().hex[:24]}"
+
+            try:
+                async for chunk in stream_openrouter_anthropic(request_dict, request_data.model):
+                    for line in chunk.splitlines():
+                        if not line.startswith("data: "):
+                            continue
+                        try:
+                            ev = json.loads(line[6:])
+                        except json.JSONDecodeError:
+                            continue
+                        ev_type = ev.get("type", "")
+                        if ev_type == "content_block_start":
+                            cb = ev.get("content_block", {})
+                            if cb.get("type") == "tool_use":
+                                current_tool = {"type": "tool_use", "id": cb.get("id", ""), "name": cb.get("name", ""), "input": {}}
+                                current_text_parts = []
+                            else:
+                                current_text_parts = []
+                        elif ev_type == "content_block_delta":
+                            delta = ev.get("delta", {})
+                            if delta.get("type") == "text_delta":
+                                current_text_parts.append(delta.get("text", ""))
+                            elif delta.get("type") == "input_json_delta" and current_tool:
+                                current_tool["_raw_input"] = current_tool.get("_raw_input", "") + delta.get("partial_json", "")
+                        elif ev_type == "content_block_stop":
+                            if current_tool:
+                                try:
+                                    current_tool["input"] = json.loads(current_tool.pop("_raw_input", "{}"))
+                                except json.JSONDecodeError:
+                                    current_tool["input"] = {}
+                                collected_content_blocks.append(current_tool)
+                                current_tool = None
+                                stop_reason = "tool_use"
+                            elif current_text_parts:
+                                text = "".join(current_text_parts)
+                                if text:
+                                    collected_content_blocks.append({"type": "text", "text": text})
+                                current_text_parts = []
+                        elif ev_type == "message_delta":
+                            stop_reason = ev.get("delta", {}).get("stop_reason", stop_reason) or stop_reason
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.error(f"OpenRouter non-streaming error: {e}", exc_info=True)
+                raise HTTPException(status_code=500, detail={"type": "error", "error": {"type": "api_error", "message": str(e)}})
+
+            return JSONResponse(content={
+                "id": message_id,
+                "type": "message",
+                "role": "assistant",
+                "content": collected_content_blocks,
+                "model": request_data.model,
+                "stop_reason": stop_reason,
+                "stop_sequence": None,
+                "usage": {"input_tokens": 0, "output_tokens": 0},
+            })
+
     # --- Codex provider routing ---
     if is_codex_model(request_data.model):
         logger.info(f"Routing to Codex provider (model={request_data.model})")

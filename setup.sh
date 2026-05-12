@@ -149,6 +149,21 @@ if [ "$needs_setup" = true ]; then
         echo ""
     fi
 
+    # 6. OpenRouter (opcional)
+    if [ -z "$OPENROUTER_API_KEY" ]; then
+        echo -e "${CYAN}→${RESET} ${BOLD}OpenRouter (opcional)${RESET}"
+        echo -e "${DIM}Permite acessar centenas de modelos (GPT-4o, Llama, Gemini, DeepSeek, etc.)${RESET}"
+        echo -e "${DIM}através de uma única API. Obtenha sua chave em: https://openrouter.ai/keys${RESET}"
+        echo ""
+        read -rp "   Deseja configurar o OpenRouter? [s/N]: " configure_openrouter
+        if [[ "$configure_openrouter" =~ ^[sS]$ ]]; then
+            read -rp "   API Key do OpenRouter: " OPENROUTER_API_KEY
+            echo ""
+        else
+            OPENROUTER_API_KEY=""
+        fi
+    fi
+
     # Write .env preserving any extra vars the user may have added manually
     if [ -f .env ]; then
         # Update existing .env: replace or append each var
@@ -168,6 +183,7 @@ if [ "$needs_setup" = true ]; then
         [ "$needs_sqlite" = true ] && _update_env_var "KIRO_CLI_DB_FILE" "$KIRO_CLI_DB_FILE"
         [ "$needs_codex_reasoning" = true ] && _update_env_var "CODEX_REASONING_EFFORT" "$CODEX_REASONING_EFFORT"
         [ "$needs_fake_reasoning_tokens" = true ] && _update_env_var "FAKE_REASONING_MAX_TOKENS" "$FAKE_REASONING_MAX_TOKENS"
+        [ -n "$OPENROUTER_API_KEY" ] && _update_env_var "OPENROUTER_API_KEY" "$OPENROUTER_API_KEY"
     else
         # Create fresh .env
         cat > .env << EOF
@@ -178,6 +194,7 @@ SERVER_HOST="$SERVER_HOST"
 KIRO_CLI_DB_FILE="$KIRO_CLI_DB_FILE"
 CODEX_REASONING_EFFORT="$CODEX_REASONING_EFFORT"
 FAKE_REASONING_MAX_TOKENS="$FAKE_REASONING_MAX_TOKENS"
+OPENROUTER_API_KEY="$OPENROUTER_API_KEY"
 EOF
     fi
 
