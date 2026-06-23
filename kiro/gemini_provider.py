@@ -527,7 +527,7 @@ async def stream_gemini_response(
                     "type": "service_unavailable",
                     "message": (
                         "Gemini is not authenticated. "
-                        "Set GEMINI_API_KEY or run `gemini auth login`."
+                        "Set GEMINI_API_KEY or run `agy` to authenticate via Antigravity CLI."
                     ),
                 },
             },
@@ -642,7 +642,7 @@ async def stream_gemini_response(
                             "type": "authentication_error",
                             "message": (
                                 "Gemini API key is invalid or OAuth2 token expired. "
-                                "Check GEMINI_API_KEY or run `gemini auth login`."
+                                "Check GEMINI_API_KEY or run `agy` to re-authenticate."
                             ),
                         },
                     },

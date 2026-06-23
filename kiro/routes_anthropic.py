@@ -137,6 +137,42 @@ async def messages(
     if anthropic_version:
         logger.debug(f"Anthropic-Version header: {anthropic_version}")
 
+    # --- Normalize: extract system messages from the messages array ---
+    # Some clients send role:"system" in the messages array (OpenAI style).
+    # Move them to the system field before routing to any provider.
+    system_from_messages = []
+    filtered_messages = []
+    for msg in request_data.messages:
+        if msg.role == "system":
+            content = msg.content
+            if isinstance(content, str):
+                system_from_messages.append(content)
+            elif isinstance(content, list):
+                system_from_messages.append(
+                    "".join(
+                        b.text if hasattr(b, "text") else b.get("text", "")
+                        for b in content
+                        if (hasattr(b, "type") and b.type == "text") or (isinstance(b, dict) and b.get("type") == "text")
+                    )
+                )
+        else:
+            filtered_messages.append(msg)
+
+    if system_from_messages:
+        extra_system = "\n".join(system_from_messages)
+        existing = request_data.system or ""
+        if isinstance(existing, list):
+            existing = "\n".join(
+                b.get("text", "") if isinstance(b, dict) else getattr(b, "text", "")
+                for b in existing
+            )
+        combined = f"{existing}\n{extra_system}".strip() if existing else extra_system
+        request_data = request_data.model_copy(update={
+            "system": combined,
+            "messages": filtered_messages,
+        })
+        logger.debug(f"Extracted {len(system_from_messages)} system message(s) from messages array")
+
     # --- OpenRouter provider routing ---
     from kiro.openrouter_provider import is_openrouter_model, stream_openrouter_anthropic
     if is_openrouter_model(request_data.model):

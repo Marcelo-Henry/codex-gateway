@@ -512,6 +512,46 @@ async def stream_openrouter_anthropic(
 # ==================================================================================================
 
 
+def _normalize_openai_messages(raw_messages: List) -> List[Dict]:
+    """
+    Normalize messages for OpenRouter: move system messages to the front.
+
+    Some downstream models (e.g. OpenAI's) reject system messages that appear
+    after non-system messages. This consolidates all system messages into a
+    single system message at position 0.
+    """
+    messages = []
+    for msg in raw_messages:
+        if isinstance(msg, dict):
+            messages.append(msg)
+        else:
+            messages.append(msg.model_dump() if hasattr(msg, "model_dump") else dict(msg))
+
+    system_parts: List[str] = []
+    non_system: List[Dict] = []
+
+    for msg in messages:
+        if msg.get("role") == "system":
+            content = msg.get("content", "")
+            if isinstance(content, list):
+                text = "".join(
+                    b.get("text", "") for b in content
+                    if isinstance(b, dict) and b.get("type") == "text"
+                )
+            else:
+                text = str(content) if content else ""
+            if text:
+                system_parts.append(text)
+        else:
+            non_system.append(msg)
+
+    result: List[Dict] = []
+    if system_parts:
+        result.append({"role": "system", "content": "\n".join(system_parts)})
+    result.extend(non_system)
+    return result
+
+
 async def stream_openrouter_openai(
     request_data: Dict[str, Any],
     model: str,
@@ -522,12 +562,7 @@ async def stream_openrouter_openai(
     The client already sent an OpenAI-format request, so we forward it
     to OpenRouter and relay the SSE chunks back directly.
     """
-    messages = []
-    for msg in request_data.get("messages", []):
-        if isinstance(msg, dict):
-            messages.append(msg)
-        else:
-            messages.append(msg.model_dump() if hasattr(msg, "model_dump") else dict(msg))
+    messages = _normalize_openai_messages(request_data.get("messages", []))
 
     payload: Dict[str, Any] = {
         "model": model,

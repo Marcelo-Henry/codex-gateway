@@ -44,9 +44,16 @@ CODE_ASSIST_ENDPOINT = "https://cloudcode-pa.googleapis.com"
 # Public Gemini API endpoint (used with API key)
 PUBLIC_GEMINI_ENDPOINT = "https://generativelanguage.googleapis.com/v1beta"
 
-# Client ID and secret used by the Gemini CLI (public OAuth client).
-# These are the well-known public credentials from the open-source Gemini CLI
-# (github.com/google-gemini/gemini-cli). They are not private secrets.
+# Client ID and secret used by the Antigravity CLI (public OAuth client).
+# These are the well-known public credentials from the Antigravity CLI
+# (github.com/google-antigravity/antigravity-cli). They are not private secrets.
+_ANTIGRAVITY_CLI_CLIENT_ID = (
+    "071006060591-tmhssin2h21lcre235vtolojh4g403ep"
+    ".apps.googleusercontent.com"
+)
+_ANTIGRAVITY_CLI_CLIENT_SECRET = "GOCSPX-" + "K58FWR486LdLJ1mLB8sXC4z6qDAf"
+
+# Legacy Gemini CLI credentials (fallback for oauth_creds.json files)
 _GEMINI_CLI_CLIENT_ID = (
     "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j"
     ".apps.googleusercontent.com"
@@ -86,21 +93,72 @@ def _resolve_auth_path() -> Path:
     return Path(GEMINI_AUTH_FILE).expanduser().resolve()
 
 
+def _is_antigravity_keyring_available() -> bool:
+    """
+    Check if Antigravity CLI credentials exist in the system keyring.
+
+    Returns:
+        True if the keyring entry (service=gemini, username=antigravity) exists
+    """
+    try:
+        import secretstorage
+        bus = secretstorage.dbus_init()
+        collection = secretstorage.get_default_collection(bus)
+        for item in collection.get_all_items():
+            attrs = item.get_attributes()
+            if attrs.get("service") == "gemini" and attrs.get("username") == "antigravity":
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def _read_antigravity_keyring() -> Optional[Dict[str, Any]]:
+    """
+    Read Antigravity CLI credentials from the system keyring.
+
+    The Antigravity CLI stores OAuth tokens in the system keyring
+    (libsecret/gnome-keyring) with service='gemini', username='antigravity'.
+
+    Returns:
+        Dict with 'access_token', 'refresh_token', 'expiry' keys, or None
+    """
+    try:
+        import secretstorage
+        bus = secretstorage.dbus_init()
+        collection = secretstorage.get_default_collection(bus)
+        for item in collection.get_all_items():
+            attrs = item.get_attributes()
+            if attrs.get("service") == "gemini" and attrs.get("username") == "antigravity":
+                secret = item.get_secret().decode("utf-8")
+                data = json.loads(secret)
+                token_data = data.get("token", {})
+                if token_data.get("refresh_token"):
+                    logger.debug("Read credentials from Antigravity CLI keyring")
+                    return token_data
+    except ImportError:
+        logger.debug("secretstorage not available, cannot read Antigravity keyring")
+    except Exception as e:
+        logger.debug(f"Failed to read Antigravity keyring: {e}")
+    return None
+
+
 def is_gemini_available() -> bool:
     """
     Check whether Gemini auth is configured.
 
-    Checks API key first, then OAuth2 credentials file.
+    Checks API key first, then Antigravity CLI keyring, then legacy OAuth2 file.
     Does NOT validate the token — only checks configuration presence.
     Safe to call at startup without network access.
 
     Returns:
-        True if GEMINI_ENABLED and either GEMINI_API_KEY is set or the
-        OAuth2 credentials file exists and is readable
+        True if GEMINI_ENABLED and any auth source is available
     """
     if not GEMINI_ENABLED:
         return False
     if GEMINI_API_KEY:
+        return True
+    if _is_antigravity_keyring_available():
         return True
     path = _resolve_auth_path()
     return path.exists() and path.is_file()
@@ -139,7 +197,7 @@ def _read_oauth_file() -> Dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(
             f"Gemini OAuth credentials file not found: {path}\n"
-            "Run `gemini auth login` to create the credentials file."
+            "Run `agy` to authenticate via Antigravity CLI."
         )
 
     try:
@@ -147,7 +205,7 @@ def _read_oauth_file() -> Dict[str, Any]:
     except OSError as e:
         raise FileNotFoundError(
             f"Cannot read Gemini credentials file {path}: {e}\n"
-            "Check file permissions or run `gemini auth login` to re-authenticate."
+            "Check file permissions or run `agy` to re-authenticate."
         ) from e
 
     try:
@@ -155,20 +213,20 @@ def _read_oauth_file() -> Dict[str, Any]:
     except json.JSONDecodeError as e:
         raise ValueError(
             f"Gemini credentials file {path} contains invalid JSON: {e}\n"
-            "Run `gemini auth login` to re-authenticate and recreate the file."
+            "Run `agy` to re-authenticate and recreate the file."
         ) from e
 
     if not isinstance(data, dict):
         raise ValueError(
             f"Gemini credentials file {path} must contain a JSON object, "
             f"got {type(data).__name__}.\n"
-            "Run `gemini auth login` to re-authenticate."
+            "Run `agy` to re-authenticate."
         )
 
     if not data.get("refresh_token"):
         raise ValueError(
             f"Gemini credentials file {path} is missing 'refresh_token'.\n"
-            "Run `gemini auth login` to re-authenticate."
+            "Run `agy` to re-authenticate."
         )
 
     return data
@@ -236,20 +294,18 @@ async def _get_oauth_token() -> str:
     """
     Return a valid Gemini OAuth2 access token, refreshing if necessary.
 
-    Supports two credential file formats:
-    - Gemini CLI format: access_token + expiry_date (ms) + refresh_token
-      Uses the hardcoded public client_id/client_secret.
-    - Legacy format: client_id + client_secret + refresh_token
+    Priority order:
+    1. Antigravity CLI keyring (service=gemini, username=antigravity)
+    2. Legacy Gemini CLI file (~/.gemini/oauth_creds.json)
 
-    Uses an in-memory cache to avoid re-reading the file on every request.
+    Uses an in-memory cache to avoid re-reading on every request.
     Uses an asyncio.Lock to prevent concurrent refresh races.
 
     Returns:
         Valid access token string
 
     Raises:
-        FileNotFoundError: If credentials file does not exist
-        ValueError: If credentials file is malformed or refresh fails
+        FileNotFoundError: If no credentials source is available
         RuntimeError: If token refresh fails
     """
     global _cached_token, _cached_expires_at
@@ -260,16 +316,70 @@ async def _get_oauth_token() -> str:
             logger.debug("Using cached Gemini OAuth2 token (still valid)")
             return _cached_token
 
-        # Read credentials file
+        # Try Antigravity CLI keyring first
+        keyring_creds = _read_antigravity_keyring()
+        if keyring_creds:
+            access_token: Optional[str] = keyring_creds.get("access_token")
+            expiry_str: Optional[str] = keyring_creds.get("expiry")
+
+            # Parse expiry (RFC3339 format from Go)
+            if access_token and expiry_str:
+                try:
+                    from datetime import datetime, timezone
+                    expiry_str_clean = expiry_str
+                    # Handle Go's timezone format (e.g. -03:00)
+                    if "+" in expiry_str or expiry_str.count("-") > 2:
+                        dt = datetime.fromisoformat(expiry_str_clean)
+                    else:
+                        dt = datetime.fromisoformat(expiry_str_clean)
+                    file_expires_at = dt.timestamp()
+                    if not _is_token_expired(file_expires_at):
+                        logger.debug("Using access_token from Antigravity CLI keyring (still valid)")
+                        _cached_token = access_token
+                        _cached_expires_at = file_expires_at
+                        return access_token
+                except (ValueError, TypeError) as e:
+                    logger.debug(f"Could not parse Antigravity token expiry: {e}")
+
+            # Token expired — refresh using Antigravity client credentials
+            refresh_token = keyring_creds.get("refresh_token", "")
+            if refresh_token:
+                try:
+                    token_data = await _refresh_oauth_token(
+                        client_id=_ANTIGRAVITY_CLI_CLIENT_ID,
+                        client_secret=_ANTIGRAVITY_CLI_CLIENT_SECRET,
+                        refresh_token=refresh_token,
+                    )
+                except httpx.HTTPStatusError as e:
+                    raise RuntimeError(
+                        f"Antigravity OAuth2 token refresh failed (HTTP {e.response.status_code}).\n"
+                        "Run `agy` to re-authenticate."
+                    ) from e
+                except Exception as e:
+                    raise RuntimeError(
+                        f"Antigravity OAuth2 token refresh failed: {e}\n"
+                        "Run `agy` to re-authenticate."
+                    ) from e
+
+                new_token: str = token_data["access_token"]
+                expires_in: Optional[int] = token_data.get("expires_in")
+                new_expires_at: Optional[float] = None
+                if expires_in is not None:
+                    new_expires_at = time.time() + expires_in
+
+                _cached_token = new_token
+                _cached_expires_at = new_expires_at
+                return new_token
+
+        # Fallback: legacy Gemini CLI oauth_creds.json file
         creds = _read_oauth_file()
 
-        # Gemini CLI format: file already contains a usable access_token + expiry_date (ms)
         file_token: Optional[str] = creds.get("access_token")
         expiry_date_ms: Optional[int] = creds.get("expiry_date")
         if file_token and expiry_date_ms is not None:
             file_expires_at = expiry_date_ms / 1000.0
             if not _is_token_expired(file_expires_at):
-                logger.debug("Using access_token from Gemini credentials file (still valid)")
+                logger.debug("Using access_token from legacy Gemini credentials file (still valid)")
                 _cached_token = file_token
                 _cached_expires_at = file_expires_at
                 return file_token
@@ -277,29 +387,29 @@ async def _get_oauth_token() -> str:
         # Token from file is expired (or absent) — refresh it
         client_id: str = creds.get("client_id") or _GEMINI_CLI_CLIENT_ID
         client_secret: str = creds.get("client_secret") or _GEMINI_CLI_CLIENT_SECRET
-        refresh_token: str = creds["refresh_token"]
+        refresh_token_legacy: str = creds["refresh_token"]
 
         try:
             token_data = await _refresh_oauth_token(
                 client_id=client_id,
                 client_secret=client_secret,
-                refresh_token=refresh_token,
+                refresh_token=refresh_token_legacy,
             )
         except httpx.HTTPStatusError as e:
             raise RuntimeError(
                 f"Gemini OAuth2 token refresh failed (HTTP {e.response.status_code}).\n"
-                "Run `gemini auth login` to re-authenticate."
+                "Run `agy` to re-authenticate."
             ) from e
         except Exception as e:
             raise RuntimeError(
                 f"Gemini OAuth2 token refresh failed: {e}\n"
-                "Run `gemini auth login` to re-authenticate."
+                "Run `agy` to re-authenticate."
             ) from e
 
-        new_token: str = token_data["access_token"]
-        expires_in: Optional[int] = token_data.get("expires_in")
+        new_token = token_data["access_token"]
+        expires_in = token_data.get("expires_in")
 
-        new_expires_at: Optional[float] = None
+        new_expires_at = None
         if expires_in is not None:
             new_expires_at = time.time() + expires_in
 
@@ -381,30 +491,34 @@ async def get_gemini_auth_headers() -> Dict[str, str]:
 
     Priority:
     1. API Key (GEMINI_API_KEY env var) → x-goog-api-key header
-    2. OAuth2 credentials file → Authorization: Bearer header
+    2. Antigravity CLI keyring → Authorization: Bearer header
+    3. Legacy OAuth2 credentials file → Authorization: Bearer header
 
     Returns:
         Dict of HTTP headers for Gemini API authentication
 
     Raises:
-        FileNotFoundError: If OAuth2 credentials file does not exist
-        ValueError: If credentials file is malformed
+        FileNotFoundError: If no credentials source is available
         RuntimeError: If OAuth2 token refresh fails
-        RuntimeError: If neither API key nor OAuth2 credentials are configured
     """
     if GEMINI_API_KEY:
         logger.debug("Using Gemini API key authentication")
         return {"x-goog-api-key": GEMINI_API_KEY}
 
+    if _is_antigravity_keyring_available():
+        logger.debug("Using Antigravity CLI OAuth2 authentication (keyring)")
+        token = await _get_oauth_token()
+        return {"Authorization": f"Bearer {token}"}
+
     path = _resolve_auth_path()
     if path.exists() and path.is_file():
-        logger.debug("Using Gemini OAuth2 authentication")
+        logger.debug("Using legacy Gemini CLI OAuth2 authentication (file)")
         token = await _get_oauth_token()
         return {"Authorization": f"Bearer {token}"}
 
     raise RuntimeError(
         "Gemini is not configured. Set GEMINI_API_KEY environment variable "
-        "or run `gemini auth login` to create OAuth2 credentials."
+        "or run `agy` to authenticate via Antigravity CLI."
     )
 
 

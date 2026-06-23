@@ -5,6 +5,7 @@ h2
 loguru
 python-dotenv
 tiktoken
+secretstorage
 pytest
 pytest-asyncio
 hypothesis

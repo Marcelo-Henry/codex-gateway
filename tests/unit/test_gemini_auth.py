@@ -133,6 +133,8 @@ class TestGeminiAuthOAuth:
         monkeypatch.setattr(auth_mod, "GEMINI_API_KEY", "")
         monkeypatch.setattr(auth_mod, "GEMINI_AUTH_FILE", str(creds_file))
         monkeypatch.setattr(auth_mod, "GEMINI_ENABLED", True)
+        monkeypatch.setattr(auth_mod, "_is_antigravity_keyring_available", lambda: False)
+        monkeypatch.setattr(auth_mod, "_read_antigravity_keyring", lambda: None)
         auth_mod.clear_token_cache()
 
         token_resp = _make_token_response(access_token="ya29.fresh-token")
@@ -163,6 +165,8 @@ class TestGeminiAuthOAuth:
         monkeypatch.setattr(auth_mod, "GEMINI_API_KEY", "")
         monkeypatch.setattr(auth_mod, "GEMINI_AUTH_FILE", str(creds_file))
         monkeypatch.setattr(auth_mod, "GEMINI_ENABLED", True)
+        monkeypatch.setattr(auth_mod, "_is_antigravity_keyring_available", lambda: False)
+        monkeypatch.setattr(auth_mod, "_read_antigravity_keyring", lambda: None)
 
         # Seed cache with an already-expired token
         auth_mod._cached_token = "old-token"
@@ -200,6 +204,8 @@ class TestGeminiAuthOAuth:
         monkeypatch.setattr(auth_mod, "GEMINI_API_KEY", "")
         monkeypatch.setattr(auth_mod, "GEMINI_AUTH_FILE", str(creds_file))
         monkeypatch.setattr(auth_mod, "GEMINI_ENABLED", True)
+        monkeypatch.setattr(auth_mod, "_is_antigravity_keyring_available", lambda: False)
+        monkeypatch.setattr(auth_mod, "_read_antigravity_keyring", lambda: None)
 
         # Seed cache with a valid (non-expired) token
         auth_mod._cached_token = "ya29.cached-valid-token"
@@ -228,6 +234,7 @@ class TestGeminiAuthOAuth:
         monkeypatch.setattr(auth_mod, "GEMINI_API_KEY", "")
         monkeypatch.setattr(auth_mod, "GEMINI_AUTH_FILE", str(missing_path))
         monkeypatch.setattr(auth_mod, "GEMINI_ENABLED", True)
+        monkeypatch.setattr(auth_mod, "_is_antigravity_keyring_available", lambda: False)
         auth_mod.clear_token_cache()
 
         # get_gemini_auth_headers checks file existence before attempting OAuth;
@@ -246,6 +253,8 @@ class TestGeminiAuthOAuth:
         monkeypatch.setattr(auth_mod, "GEMINI_API_KEY", "")
         monkeypatch.setattr(auth_mod, "GEMINI_AUTH_FILE", str(creds_file))
         monkeypatch.setattr(auth_mod, "GEMINI_ENABLED", True)
+        monkeypatch.setattr(auth_mod, "_is_antigravity_keyring_available", lambda: False)
+        monkeypatch.setattr(auth_mod, "_read_antigravity_keyring", lambda: None)
         auth_mod.clear_token_cache()
 
         with pytest.raises(ValueError, match="invalid JSON"):
@@ -264,6 +273,8 @@ class TestGeminiAuthOAuth:
         monkeypatch.setattr(auth_mod, "GEMINI_API_KEY", "")
         monkeypatch.setattr(auth_mod, "GEMINI_AUTH_FILE", str(creds_file))
         monkeypatch.setattr(auth_mod, "GEMINI_ENABLED", True)
+        monkeypatch.setattr(auth_mod, "_is_antigravity_keyring_available", lambda: False)
+        monkeypatch.setattr(auth_mod, "_read_antigravity_keyring", lambda: None)
         auth_mod.clear_token_cache()
 
         with pytest.raises(ValueError, match="missing 'refresh_token'"):
@@ -300,6 +311,7 @@ class TestGeminiAuthEdgeCases:
         monkeypatch.setattr(auth_mod, "GEMINI_API_KEY", "")
         monkeypatch.setattr(auth_mod, "GEMINI_AUTH_FILE", str(missing_path))
         monkeypatch.setattr(auth_mod, "GEMINI_ENABLED", True)
+        monkeypatch.setattr(auth_mod, "_is_antigravity_keyring_available", lambda: False)
 
         assert auth_mod.is_gemini_available() is False
 
@@ -326,6 +338,8 @@ class TestGeminiAuthEdgeCases:
         monkeypatch.setattr(auth_mod, "GEMINI_API_KEY", "")
         monkeypatch.setattr(auth_mod, "GEMINI_AUTH_FILE", str(missing_path))
         monkeypatch.setattr(auth_mod, "GEMINI_ENABLED", True)
+        monkeypatch.setattr(auth_mod, "_is_antigravity_keyring_available", lambda: False)
+        monkeypatch.setattr(auth_mod, "_read_antigravity_keyring", lambda: None)
         auth_mod.clear_token_cache()
 
         with pytest.raises(RuntimeError, match="not configured"):
@@ -342,6 +356,8 @@ class TestGeminiAuthEdgeCases:
         monkeypatch.setattr(auth_mod, "GEMINI_API_KEY", "")
         monkeypatch.setattr(auth_mod, "GEMINI_AUTH_FILE", str(creds_file))
         monkeypatch.setattr(auth_mod, "GEMINI_ENABLED", True)
+        monkeypatch.setattr(auth_mod, "_is_antigravity_keyring_available", lambda: False)
+        monkeypatch.setattr(auth_mod, "_read_antigravity_keyring", lambda: None)
         auth_mod.clear_token_cache()
 
         # Simulate a 401 from Google
